@@ -18,7 +18,7 @@ goods = [
 ]
 
 OUTPUT_FILE = "all_goods_wide.xlsx"
-FIXED_TIMES = [dt_time(10, 0), dt_time(22, 0)]  # 每日固定抓取时间
+FIXED_TIMES = [dt_time(13, 0), dt_time(20, 0), dt_time(23, 59)]  # 每日固定抓取时间
 
 
 # ================== 数据抓取 ==================
@@ -50,8 +50,6 @@ def fetch_price_history(good_id):
                         "price": prices,
                         "volume": volumes if volumes else [0]*len(prices)
                     })
-                    # 计算相对前一天价格的绝对变化量
-                    df['abs_change'] = df['price'].diff().fillna(0)
                     return df
         print(f"请求饰品 {good_id} 返回数据异常或为空")
         return pd.DataFrame()
@@ -60,8 +58,28 @@ def fetch_price_history(good_id):
         return pd.DataFrame()
 
 
-# ================== Excel 更新（保留格式） ==================
+# ================== Excel 更新（保留格式、计算上一次抓取差值） ==================
 def update_wide_excel(goods_data_dict):
+    # 读取已有 Excel
+    if os.path.exists(OUTPUT_FILE):
+        wb = load_workbook(OUTPUT_FILE)
+        ws = wb["wide"] if "wide" in wb.sheetnames else wb.active
+        last_prices = {}
+        # 获取每个饰品最后一条价格
+        header = [ws.cell(1, c).value for c in range(1, ws.max_column+1)]
+        for i, name in enumerate(goods_data_dict.keys()):
+            col_idx = header.index(f"{name}_price") + 1 if f"{name}_price" in header else None
+            if col_idx and ws.max_row > 1:
+                last_prices[name] = ws.cell(ws.max_row, col_idx).value
+            else:
+                last_prices[name] = None
+    else:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "wide"
+        last_prices = {name: None for name in goods_data_dict.keys()}
+
+    # ================== 整理新数据 ==================
     all_rows = []
     for name, df in goods_data_dict.items():
         if df.empty:
@@ -69,19 +87,26 @@ def update_wide_excel(goods_data_dict):
         df['date'] = df['timestamp'].dt.date
         grouped = df.groupby('date')
         rows = []
+
+        prev_price = last_prices.get(name)
         for day, group in grouped:
             group = group.sort_values('timestamp').reset_index(drop=True)
             for ft in FIXED_TIMES:
                 target_dt = datetime.combine(day, ft)
                 now = datetime.now()
                 if target_dt > now:
-                    continue  # 未来时间点不记录
+                    continue
                 closest_row = group.iloc[(group['timestamp'] - target_dt).abs().argsort().iloc[0]]
+                current_price = closest_row['price']
+                # 与上一次抓取价格差
+                price_change = current_price - prev_price if prev_price is not None else 0
+                prev_price = current_price
+
                 row = {
                     "timestamp": target_dt,
-                    f"{name}_price": closest_row['price'],
+                    f"{name}_price": current_price,
                     f"{name}_volume": closest_row['volume'],
-                    f"{name}_abs_change": closest_row['abs_change']
+                    f"{name}_price_change": price_change
                 }
                 rows.append(row)
         all_rows.append(pd.DataFrame(rows))
@@ -97,33 +122,16 @@ def update_wide_excel(goods_data_dict):
 
     combined_df.sort_values("timestamp", inplace=True)
 
-    # ================== 用 openpyxl 写入数据，保留格式 ==================
-    if os.path.exists(OUTPUT_FILE):
-        wb = load_workbook(OUTPUT_FILE)
-        if "wide" in wb.sheetnames:
-            ws = wb["wide"]
-        else:
-            ws = wb.create_sheet("wide")
-    else:
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "wide"
-
+    # ================== 写入 Excel（保留格式） ==================
     # 写表头（新表格才写）
     if ws.max_row == 1 and ws.max_column == 1 and ws["A1"].value is None:
         for col, col_name in enumerate(combined_df.columns, 1):
             ws.cell(row=1, column=col, value=col_name)
 
-    # 现有表格的数据行数
     existing_rows = ws.max_row
-
-    # 找出新数据（比最后一行时间戳更新的部分）
-    last_timestamp = None
-    if existing_rows > 1:
-        last_timestamp = ws.cell(row=existing_rows, column=1).value
-
     new_data = combined_df
-    if last_timestamp:
+    if existing_rows > 1:
+        last_timestamp = ws.cell(existing_rows, 1).value
         new_data = combined_df[combined_df["timestamp"] > pd.to_datetime(last_timestamp)]
 
     if new_data.empty:
