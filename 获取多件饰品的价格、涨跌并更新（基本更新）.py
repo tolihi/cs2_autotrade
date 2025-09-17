@@ -4,160 +4,175 @@ from datetime import datetime, timedelta, time as dt_time
 import pandas as pd
 import os
 from openpyxl import load_workbook, Workbook
+import time
 
 # ================== 配置 ==================
 API_TOKEN = "BEDDU1T7F5R7D9U9Z0V8I7F5"
-url = "https://api.csqaq.com/api/v1/info/chart"
+URL_BIND_IP = "https://api.csqaq.com/api/v1/sys/bind_local_ip"
+URL_CHART = "https://api.csqaq.com/api/v1/info/chart"
 
 goods = [
-    {"good_id": "19653", "name": "传承"},
-    {"good_id": "144", "name": "皇后"},
-    {"good_id": "14797", "name": "夜愿"},
-    {"good_id": "16422", "name": "一发入魂"},
-    {"good_id": "23718", "name": "幽独"},
+    {"good_id": "19653", "name": "传承-崭新","category":"枪皮","item":"传承"},
+    {"good_id": "19619", "name": "传承-略磨","category":"枪皮","item":"传承"},
+    {"good_id": "144", "name": "皇后","category":"枪皮","item":"皇后"},
+    {"good_id": "14797", "name": "夜愿","category":"枪皮","item":"夜愿"},
+    {"good_id": "16422", "name": "一发入魂","category":"枪皮","item":"一发入魂"},
+    {"good_id": "23718", "name": "幽独","category":"枪皮","item":"幽独"},
 ]
 
 OUTPUT_FILE = "all_goods_wide.xlsx"
-FIXED_TIMES = [dt_time(13, 0), dt_time(20, 0), dt_time(23, 59)]  # 每日固定抓取时间
+FIXED_TIMES = [dt_time(13, 0), dt_time(20, 0), dt_time(23, 59)]  # 每日抓取固定时间
 
+# ================== 绑定 IP ==================
+def bind_my_ip():
+    headers = {"ApiToken": API_TOKEN}
+    try:
+        resp = requests.post(URL_BIND_IP, headers=headers, timeout=10)
+        if resp.status_code == 200:
+            j = resp.json()
+            if j.get("code") == 200:
+                print("✅ IP 绑定成功：", j.get("data"))
+                return True
+            else:
+                print("❌ 绑定失败:", j)
+        else:
+            print("❌ HTTP 错误:", resp.status_code, resp.text)
+    except Exception as e:
+        print("❌ 请求绑定IP失败:", e)
+    return False
 
-# ================== 数据抓取 ==================
-def fetch_price_history(good_id):
-    payload = json.dumps({
+# ================== 数据抓取（增加字段） ==================
+def fetch_price_history_extended(good_id, period=90, retries=3, delay=2):
+    headers = {"ApiToken": API_TOKEN, "Content-Type": "application/json"}
+    payload = {
         "good_id": good_id,
         "key": "sell_price",
         "platform": 1,
-        "period": "90",  # 最近90天
+        "period": str(period),
         "style": "all_style"
-    })
-    headers = {
-        'ApiToken': API_TOKEN,
-        'Content-Type': 'application/json'
     }
+    for attempt in range(1, retries+1):
+        try:
+            response = requests.post(URL_CHART, headers=headers, data=json.dumps(payload), timeout=10)
+            if response.status_code == 200:
+                res_json = response.json()
+                if res_json.get("code") == 200:
+                    data = res_json.get("data", {})
+                    timestamps = data.get("timestamp", [])
+                    prices = data.get("main_data", [])
+                    volumes = data.get("num_data", [])
+                    max_prices = data.get("max_price", [])  # 假设有最大价字段
+                    min_prices = data.get("min_price", [])  # 假设有最小价字段
+                    if timestamps and prices:
+                        df = pd.DataFrame({
+                            "timestamp": [datetime.fromtimestamp(ts/1000) for ts in timestamps],
+                            "price": prices,
+                            "volume": volumes if volumes else [0]*len(prices),
+                            "max_price": pd.Series(prices).cummax() if not max_prices else max_prices,
+                            "min_price": pd.Series(prices).cummin() if not min_prices else min_prices,
+                            "price_change": [prices[i] - prices[i-1] if i > 0 else 0 for i in range(len(prices))]
+                        })
+                        df['price_change'] = df['price'].diff().fillna(0)  # 价格差
+                        return df
+            print(f"[HTTP {response.status_code}] good_id={good_id} 返回异常或为空")
+        except Exception as e:
+            print(f"⚠ 尝试 {attempt}/{retries} 获取 good_id={good_id} 失败: {e}")
+        time.sleep(delay)
+    print(f"❌ good_id={good_id} 所有尝试失败")
+    return pd.DataFrame()
 
-    try:
-        response = requests.post(url, headers=headers, data=payload)
-        if response.status_code == 200:
-            res_json = response.json()
-            if res_json.get('code') == 200:
-                data = res_json.get('data', {})
-                timestamps = data.get('timestamp', [])
-                prices = data.get('main_data', [])
-                volumes = data.get('num_data', [])
-                if timestamps and prices:
-                    df = pd.DataFrame({
-                        "timestamp": [datetime.fromtimestamp(ts / 1000) for ts in timestamps],
-                        "price": prices,
-                        "volume": volumes if volumes else [0]*len(prices)
-                    })
-                    return df
-        print(f"请求饰品 {good_id} 返回数据异常或为空")
-        return pd.DataFrame()
-    except Exception as e:
-        print(f"获取饰品 {good_id} 数据失败: {e}")
-        return pd.DataFrame()
-
-
-# ================== Excel 更新（保留格式、计算上一次抓取差值） ==================
+# ================== Excel 更新（保留格式 + 多Sheet） ==================
 def update_wide_excel(goods_data_dict):
-    # 读取已有 Excel
-    if os.path.exists(OUTPUT_FILE):
-        wb = load_workbook(OUTPUT_FILE)
-        ws = wb["wide"] if "wide" in wb.sheetnames else wb.active
-        last_prices = {}
-        # 获取每个饰品最后一条价格
-        header = [ws.cell(1, c).value for c in range(1, ws.max_column+1)]
-        for i, name in enumerate(goods_data_dict.keys()):
-            col_idx = header.index(f"{name}_price") + 1 if f"{name}_price" in header else None
-            if col_idx and ws.max_row > 1:
-                last_prices[name] = ws.cell(ws.max_row, col_idx).value
+    """
+    goods_data_dict: { '饰品名': df, ... }
+    goods: 全局列表，需包含 'category' 字段
+    """
+    # 构建类别映射
+    category_map = {}
+    for good in goods:
+        cat = good["category"]
+        category_map.setdefault(cat, []).append(good["name"])
+
+    for category, good_names in category_map.items():
+        output_file = f"{category}.xlsx"  # 每个类别生成独立 Excel
+        if os.path.exists(output_file):
+            wb = load_workbook(output_file)
+        else:
+            wb = Workbook()
+            wb.active.title = "wide"  # 默认 sheet 名称
+
+        for name in good_names:
+            df = goods_data_dict.get(name)
+            if df is None or df.empty:
+                continue
+
+            # 每个饰品单独 Sheet
+            if name in wb.sheetnames:
+                ws = wb[name]
             else:
-                last_prices[name] = None
-    else:
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "wide"
-        last_prices = {name: None for name in goods_data_dict.keys()}
+                ws = wb.create_sheet(name)
 
-    # ================== 整理新数据 ==================
-    all_rows = []
-    for name, df in goods_data_dict.items():
-        if df.empty:
-            continue
-        df['date'] = df['timestamp'].dt.date
-        grouped = df.groupby('date')
-        rows = []
+            # 整理数据按固定时间抓取
+            df['date'] = df['timestamp'].dt.date
+            grouped = df.groupby('date')
+            rows = []
+            for day, group in grouped:
+                group = group.sort_values('timestamp').reset_index(drop=True)
+                for ft in FIXED_TIMES:
+                    target_dt = datetime.combine(day, ft)
+                    now = datetime.now()
+                    if target_dt > now:
+                        continue
+                    closest_row = group.iloc[(group['timestamp'] - target_dt).abs().argsort().iloc[0]]
+                    row = {
+                        "timestamp": target_dt,
+                        "price": closest_row['price'],
+                        "volume": closest_row['volume'],
+                        "max_price": closest_row.get('max_price', 0),
+                        "min_price": closest_row.get('min_price', 0),
+                        "price_change": closest_row.get('price_change', 0)
+                    }
+                    rows.append(row)
 
-        prev_price = last_prices.get(name)
-        for day, group in grouped:
-            group = group.sort_values('timestamp').reset_index(drop=True)
-            for ft in FIXED_TIMES:
-                target_dt = datetime.combine(day, ft)
-                now = datetime.now()
-                if target_dt > now:
-                    continue
-                closest_row = group.iloc[(group['timestamp'] - target_dt).abs().argsort().iloc[0]]
-                current_price = closest_row['price']
-                # 与上一次抓取价格差
-                price_change = current_price - prev_price if prev_price is not None else 0
-                prev_price = current_price
+            if not rows:
+                continue
 
-                row = {
-                    "timestamp": target_dt,
-                    f"{name}_price": current_price,
-                    f"{name}_volume": closest_row['volume'],
-                    f"{name}_price_change": price_change
-                }
-                rows.append(row)
-        all_rows.append(pd.DataFrame(rows))
+            new_df = pd.DataFrame(rows)
 
-    if not all_rows:
-        print("没有可更新的数据")
-        return
+            # 写表头（新Sheet或空Sheet才写）
+            if ws.max_row == 1 and ws.max_column == 1 and ws["A1"].value is None:
+                for col_idx, col_name in enumerate(new_df.columns, 1):
+                    ws.cell(row=1, column=col_idx, value=col_name)
 
-    # 合并所有饰品数据
-    combined_df = pd.DataFrame({"timestamp": sorted({row['timestamp'] for df in all_rows for _, row in df.iterrows()})})
-    for df in all_rows:
-        combined_df = pd.merge(combined_df, df, on="timestamp", how="left")
+            # 增量更新（只写入时间戳之后的数据）
+            existing_rows = ws.max_row
+            last_ts = ws.cell(existing_rows, 1).value if existing_rows > 1 else None
+            write_df = new_df
+            if last_ts:
+                write_df = new_df[new_df['timestamp'] > pd.to_datetime(last_ts)]
 
-    combined_df.sort_values("timestamp", inplace=True)
+            for r_idx, row in enumerate(write_df.itertuples(index=False), existing_rows + 1):
+                for c_idx, value in enumerate(row, 1):
+                    ws.cell(row=r_idx, column=c_idx, value=value)
 
-    # ================== 写入 Excel（保留格式） ==================
-    # 写表头（新表格才写）
-    if ws.max_row == 1 and ws.max_column == 1 and ws["A1"].value is None:
-        for col, col_name in enumerate(combined_df.columns, 1):
-            ws.cell(row=1, column=col, value=col_name)
-
-    existing_rows = ws.max_row
-    new_data = combined_df
-    if existing_rows > 1:
-        last_timestamp = ws.cell(existing_rows, 1).value
-        new_data = combined_df[combined_df["timestamp"] > pd.to_datetime(last_timestamp)]
-
-    if new_data.empty:
-        print("没有新的数据需要写入")
-    else:
-        for r_idx, row in enumerate(new_data.itertuples(index=False), existing_rows + 1):
-            for c_idx, value in enumerate(row, 1):
-                ws.cell(row=r_idx, column=c_idx, value=value)
-
-    wb.save(OUTPUT_FILE)
-    print(f"{OUTPUT_FILE} 已更新，总行数: {ws.max_row}")
+        wb.save(output_file)
+        print(f"{output_file} 已更新完成")
 
 
-# ================== 主执行函数 ==================
+# ================== 主执行 ==================
 def run_update():
-    print(f"--- 数据刷新 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ---")
+    if not bind_my_ip():
+        print("❌ IP绑定失败，程序退出")
+        return
+    print(f"--- 数据刷新 {datetime.now()} ---")
     goods_data = {}
     for good in goods:
-        df = fetch_price_history(good["good_id"])
+        df = fetch_price_history_extended(good["good_id"])
         goods_data[good["name"]] = df
         if not df.empty:
             print(f"{good['name']} 最新价格: {df['price'].iloc[-1]:.2f} RMB")
-
     update_wide_excel(goods_data)
-    print("程序执行完毕，已退出。")
-
+    print("程序执行完毕")
 
 if __name__ == "__main__":
     run_update()
