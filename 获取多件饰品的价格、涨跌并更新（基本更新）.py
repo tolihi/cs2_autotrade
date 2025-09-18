@@ -82,12 +82,13 @@ def fetch_price_history_extended(good_id, period=90, retries=3, delay=2):
     print(f"❌ good_id={good_id} 所有尝试失败")
     return pd.DataFrame()
 
-# ================== Excel 更新（保留格式 + 多Sheet） ==================
+# ================== Excel  ==================（之后修改列表的列名，使得后续数据处理时，读取数据正常，price_change部分仍有相当大的问题）
 def update_wide_excel(goods_data_dict):
     """
     goods_data_dict: { '饰品名': df, ... }
     goods: 全局列表，需包含 'category' 和 'item' 字段
     """
+
     # 构建类别 -> item -> 饰品 的映射
     category_map = {}
     for good in goods:
