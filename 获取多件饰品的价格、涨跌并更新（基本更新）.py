@@ -18,6 +18,7 @@ goods = [
     {"good_id": "14797", "name": "夜愿","category":"枪皮","item":"夜愿"},
     {"good_id": "16422", "name": "一发入魂","category":"枪皮","item":"一发入魂"},
     {"good_id": "23718", "name": "幽独","category":"枪皮","item":"幽独"},
+    {"good_id": "14135", "name": "黑蛋-全息","category":"贴纸","item":"黑蛋"},
 ]
 
 OUTPUT_FILE = "all_goods_wide.xlsx"
@@ -85,78 +86,89 @@ def fetch_price_history_extended(good_id, period=90, retries=3, delay=2):
 def update_wide_excel(goods_data_dict):
     """
     goods_data_dict: { '饰品名': df, ... }
-    goods: 全局列表，需包含 'category' 字段
+    goods: 全局列表，需包含 'category' 和 'item' 字段
     """
-    # 构建类别映射
+    # 构建类别 -> item -> 饰品 的映射
     category_map = {}
     for good in goods:
         cat = good["category"]
-        category_map.setdefault(cat, []).append(good["name"])
+        item = good["item"]
+        category_map.setdefault(cat, {}).setdefault(item, []).append(good["name"])
 
-    for category, good_names in category_map.items():
-        output_file = f"{category}.xlsx"  # 每个类别生成独立 Excel
+    for category, item_dict in category_map.items():
+        output_file = f"{category}.xlsx"  # 每个类别生成一个 Excel
         if os.path.exists(output_file):
             wb = load_workbook(output_file)
         else:
             wb = Workbook()
-            wb.active.title = "wide"  # 默认 sheet 名称
+            wb.active.title = "wide"  # 默认 sheet
 
-        for name in good_names:
-            df = goods_data_dict.get(name)
-            if df is None or df.empty:
-                continue
-
-            # 每个饰品单独 Sheet
-            if name in wb.sheetnames:
-                ws = wb[name]
+        for item, good_names in item_dict.items():
+            # 每个 item 放一个 sheet
+            if item in wb.sheetnames:
+                ws = wb[item]
             else:
-                ws = wb.create_sheet(name)
+                ws = wb.create_sheet(item)
 
-            # 整理数据按固定时间抓取
-            df['date'] = df['timestamp'].dt.date
-            grouped = df.groupby('date')
-            rows = []
-            for day, group in grouped:
-                group = group.sort_values('timestamp').reset_index(drop=True)
-                for ft in FIXED_TIMES:
-                    target_dt = datetime.combine(day, ft)
-                    now = datetime.now()
-                    if target_dt > now:
-                        continue
-                    closest_row = group.iloc[(group['timestamp'] - target_dt).abs().argsort().iloc[0]]
-                    row = {
-                        "timestamp": target_dt,
-                        "price": closest_row['price'],
-                        "volume": closest_row['volume'],
-                        "max_price": closest_row.get('max_price', 0),
-                        "min_price": closest_row.get('min_price', 0),
-                        "price_change": closest_row.get('price_change', 0)
-                    }
-                    rows.append(row)
+            all_rows = []
+            for name in good_names:
+                df = goods_data_dict.get(name)
+                if df is None or df.empty:
+                    continue
 
-            if not rows:
+                # 整理数据按固定时间抓取
+                df['date'] = df['timestamp'].dt.date
+                grouped = df.groupby('date')
+                rows = []
+                for day, group in grouped:
+                    group = group.sort_values('timestamp').reset_index(drop=True)
+                    for ft in FIXED_TIMES:
+                        target_dt = datetime.combine(day, ft)
+                        now = datetime.now()
+                        if target_dt > now:
+                            continue
+                        closest_row = group.iloc[(group['timestamp'] - target_dt).abs().argsort().iloc[0]]
+                        row = {
+                            "timestamp": target_dt,
+                            f"{name}_price": closest_row['price'],
+                            f"{name}_volume": closest_row['volume'],
+                            f"{name}_max_price": closest_row.get('max_price', 0),
+                            f"{name}_min_price": closest_row.get('min_price', 0),
+                            f"{name}_price_change": closest_row.get('price_change', 0)
+                        }
+                        rows.append(row)
+
+                if rows:
+                    all_rows.append(pd.DataFrame(rows))
+
+            if not all_rows:
                 continue
 
-            new_df = pd.DataFrame(rows)
+            # 合并所有饰品数据
+            combined_df = pd.DataFrame({"timestamp": sorted({row['timestamp'] for df in all_rows for _, row in df.iterrows()})})
+            for df in all_rows:
+                combined_df = pd.merge(combined_df, df, on="timestamp", how="left")
+            combined_df.sort_values("timestamp", inplace=True)
 
-            # 写表头（新Sheet或空Sheet才写）
+            # 写表头
             if ws.max_row == 1 and ws.max_column == 1 and ws["A1"].value is None:
-                for col_idx, col_name in enumerate(new_df.columns, 1):
+                for col_idx, col_name in enumerate(combined_df.columns, 1):
                     ws.cell(row=1, column=col_idx, value=col_name)
 
-            # 增量更新（只写入时间戳之后的数据）
+            # 增量更新
             existing_rows = ws.max_row
             last_ts = ws.cell(existing_rows, 1).value if existing_rows > 1 else None
-            write_df = new_df
+            new_data = combined_df
             if last_ts:
-                write_df = new_df[new_df['timestamp'] > pd.to_datetime(last_ts)]
+                new_data = combined_df[combined_df["timestamp"] > pd.to_datetime(last_ts)]
 
-            for r_idx, row in enumerate(write_df.itertuples(index=False), existing_rows + 1):
+            for r_idx, row in enumerate(new_data.itertuples(index=False), existing_rows + 1):
                 for c_idx, value in enumerate(row, 1):
                     ws.cell(row=r_idx, column=c_idx, value=value)
 
         wb.save(output_file)
         print(f"{output_file} 已更新完成")
+
 
 
 # ================== 主执行 ==================
