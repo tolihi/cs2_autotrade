@@ -11,14 +11,16 @@ API_TOKEN = "BEDDU1T7F5R7D9U9Z0V8I7F5"
 URL_BIND_IP = "https://api.csqaq.com/api/v1/sys/bind_local_ip"
 URL_CHART = "https://api.csqaq.com/api/v1/info/chart"
 
+
+#输入商品的时候请
 goods = [
-    {"good_id": "19653", "name": "传承-崭新","category":"枪皮","item":"传承"},
-    {"good_id": "19619", "name": "传承-略磨","category":"枪皮","item":"传承"},
-    {"good_id": "144", "name": "皇后","category":"枪皮","item":"皇后"},
-    {"good_id": "14797", "name": "夜愿","category":"枪皮","item":"夜愿"},
-    {"good_id": "16422", "name": "一发入魂","category":"枪皮","item":"一发入魂"},
-    {"good_id": "23718", "name": "幽独","category":"枪皮","item":"幽独"},
-    {"good_id": "14135", "name": "黑蛋-全息","category":"贴纸","item":"黑蛋"},
+    {"good_id": "19653", "name": "传承-崭新","category":"gun","item":"传承"},
+   # {"good_id": "19619", "name": "传承-略磨","category":"gun","item":"传承"},
+    {"good_id": "144", "name": "皇后","category":"gun","item":"皇后"},
+    {"good_id": "14797", "name": "夜愿","category":"gun","item":"夜愿"},
+    {"good_id": "16422", "name": "一发入魂","category":"gun","item":"一发入魂"},
+    {"good_id": "23718", "name": "幽独","category":"gun","item":"幽独"},
+    {"good_id": "14135", "name": "黑蛋-全息","category":"stick","item":"黑蛋"},
 ]
 
 OUTPUT_FILE = "all_goods_wide.xlsx"
@@ -62,8 +64,8 @@ def fetch_price_history_extended(good_id, period=90, retries=3, delay=2):
                     timestamps = data.get("timestamp", [])
                     prices = data.get("main_data", [])
                     volumes = data.get("num_data", [])
-                    max_prices = data.get("max_price", [])  # 假设有最大价字段
-                    min_prices = data.get("min_price", [])  # 假设有最小价字段
+                    max_prices = data.get("max_price", [])
+                    min_prices = data.get("min_price", [])
                     if timestamps and prices:
                         df = pd.DataFrame({
                             "timestamp": [datetime.fromtimestamp(ts/1000) for ts in timestamps],
@@ -97,14 +99,16 @@ def update_wide_excel(goods_data_dict):
         category_map.setdefault(cat, {}).setdefault(item, []).append(good["name"])
 
     for category, item_dict in category_map.items():
-        output_file = f"{category}.xlsx"  # 每个类别生成一个 Excel
+        output_file = f"{category}.xlsx"  # 每个类别生成一个 Excel，名字设置为category
         if os.path.exists(output_file):
             wb = load_workbook(output_file)
         else:
             wb = Workbook()
-            wb.active.title = "wide"  # 默认 sheet
+            default_sheet = wb.active
+            wb.remove(default_sheet)
+            #wb.active.title = "wide"  # 默认 sheet
 
-        for item, good_names in item_dict.items():
+        for item, good_names in item_dict.items():  #这部分需要修改，将每个sheet的列名修改成通用的列名，便于后续处理
             # 每个 item 放一个 sheet
             if item in wb.sheetnames:
                 ws = wb[item]
@@ -131,11 +135,10 @@ def update_wide_excel(goods_data_dict):
                         closest_row = group.iloc[(group['timestamp'] - target_dt).abs().argsort().iloc[0]]
                         row = {
                             "timestamp": target_dt,
-                            f"{name}_price": closest_row['price'],
-                            f"{name}_volume": closest_row['volume'],
-                            f"{name}_max_price": closest_row.get('max_price', 0),
-                            f"{name}_min_price": closest_row.get('min_price', 0),
-                            f"{name}_price_change": closest_row.get('price_change', 0)
+                            "price": closest_row['price'],
+                            "volume": closest_row['volume'],
+                            "max_price": closest_row.get('max_price', 0),
+                            "min_price": closest_row.get('min_price', 0)
                         }
                         rows.append(row)
 
