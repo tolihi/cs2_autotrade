@@ -15,11 +15,15 @@ URL_CHART = "https://api.csqaq.com/api/v1/info/chart"
 #输入商品的时候请
 goods = [
     {"good_id": "19653", "name": "传承-崭新","category":"gun","item":"传承"},
-   # {"good_id": "19619", "name": "传承-略磨","category":"gun","item":"传承"},
-    {"good_id": "144", "name": "皇后","category":"gun","item":"皇后"},
-    {"good_id": "14797", "name": "夜愿","category":"gun","item":"夜愿"},
-    {"good_id": "16422", "name": "一发入魂","category":"gun","item":"一发入魂"},
+    #{"good_id": "19619", "name": "传承-略磨","category":"gun","item":"传承"},
+    #{"good_id": "144", "name": "皇后","category":"gun","item":"皇后"},
+    #{"good_id": "14797", "name": "夜愿","category":"gun","item":"夜愿"},
+    #{"good_id": "16422", "name": "一发入魂","category":"gun","item":"一发入魂"},
     {"good_id": "23718", "name": "幽独","category":"gun","item":"幽独"},
+    {"good_id": "12196", "name": "deagle蓝色层压板","category":"gun","item":"deagle蓝色层压板"},
+    {"good_id": "20607", "name": "deagle跷跷板","category":"gun","item":"deagle跷跷板"},
+    {"good_id": "20565", "name": "鼠鼠我呀","category":"gun","item":"鼠鼠我呀"},
+    {"good_id": "1205", "name": "血虎","category":"gun","item":"血虎"},
     {"good_id": "14135", "name": "黑蛋-全息","category":"stick","item":"黑蛋"},
 ]
 
