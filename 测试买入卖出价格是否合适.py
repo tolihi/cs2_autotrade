@@ -11,14 +11,18 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 LOOKBACK_DAYS = 90
 SLOPE_WINDOW = 30
 COOLDOWN_DAYS = 7
-BUY_PROB_THRESHOLD = 0.6
+BUY_PROB_THRESHOLD = 0.7
 FOCUS_CATEGORY = "枪皮"
-MIN_PARA = 1.05
-MAX_PARA = 0.95
+MIN_PARA = 1.1
+MAX_PARA = 0.9
+EXPECT_YIELD_PARA = 0.08
+#小件物品的风险普遍偏高，甚至高过100%，大件普遍偏低
+EXPECT_RISK_PARA_HIGH = 0.3
+EXPECT_RISK_PARA_LOW = 0.6
 
 COST_MATRIX = {
-    "FN": 2.0,  # 错过买入的成本
-    "FP": 1.0   # 错误买入的成本
+    "FN": 1.0,  # 错过买入的成本
+    "FP": 5.0   # 错误买入的成本
 }
 
 # ================== 数据读取 ==================
@@ -192,23 +196,33 @@ def evaluate_goods_classification(goods_data_dict, goods_config):
 
         decisions = []
         expected_profits = []
+        expected_losses = []
 
         # ================== 决策逻辑 ==================
         for i, row in df.iterrows():
             price = row["price"]
-            slope = features.loc[i, "trend_slope"]
+            slope = features.loc[i, "trend_slope"]  #这段slope的定义有点模糊
 
             # 动态计算过去 LOOKBACK_DAYS 的最高/最低价
             start_idx = max(0, i - LOOKBACK_DAYS)
             hist_min = df["price"].iloc[start_idx:i+1].min()
             hist_max = df["price"].iloc[start_idx:i+1].max()
+            #定义在实际判断过程中的最大最小值
             min_price = hist_min * MIN_PARA
             max_price = hist_max * MAX_PARA
 
-            expected_profit = prob_buy[i] * (hist_max - price)
+            #预期收益
+            expected_profit = prob_buy[i] * (max_price - price)
             expected_yield = expected_profit / price
             expected_profits.append(expected_profit)
 
+            #预期风险
+            expected_loss = prob_buy[i] * (price - min_price)
+            expected_risk = expected_loss / price
+            expected_losses.append(expected_loss)
+
+            #此处购买逻辑判断错误有点大，需要修改
+            #slope判断条件模糊，需更新一版新的
             decision = "观望"
             # 强制买入/卖出逻辑
             if price <= min_price:
@@ -216,9 +230,23 @@ def evaluate_goods_classification(goods_data_dict, goods_config):
             elif price >= max_price:
                 decision = "卖出"
             # 模型 & 趋势判断逻辑
-            elif slope > 0 and expected_yield > 0.05 and prob_buy[i] > BUY_PROB_THRESHOLD:
+            #上升阶段买进
+            elif slope > 0 and expected_yield > EXPECT_YIELD_PARA and expected_risk < EXPECT_RISK_PARA and prob_buy[i] >= BUY_PROB_THRESHOLD:
                 decision = "买入"
-            elif slope < 0:
+            #下降阶段买进
+            elif slope < 0 and expected_yield > EXPECT_YIELD_PARA and expected_risk < EXPECT_RISK_PARA and prob_buy[i] >= BUY_PROB_THRESHOLD:
+                decision = "买入"
+            #上升阶段卖出
+            elif slope > 0 and expected_yield > EXPECT_YIELD_PARA and expected_risk > EXPECT_RISK_PARA and prob_buy[i] > BUY_PROB_THRESHOLD:
+                decision = "卖出"
+            #下降阶段卖出
+            elif slope > 0 and expected_yield > EXPECT_YIELD_PARA and expected_risk < EXPECT_RISK_PARA and prob_buy[i] > BUY_PROB_THRESHOLD:
+                decision = "卖出"
+
+            #振荡市的买入卖出判断
+            #大件物品和小件物品分类判断
+
+            else:
                 decision = "观望"
 
             decisions.append(decision)
@@ -230,6 +258,7 @@ def evaluate_goods_classification(goods_data_dict, goods_config):
             "trend_slope": features["trend_slope"],
             "prob_buy": prob_buy,
             "expected_profit": expected_profits,
+            "expected_loss": expected_losses,
             "decision": decisions
         })
 
