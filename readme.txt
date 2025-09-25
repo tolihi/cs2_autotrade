@@ -20,3 +20,7 @@
 10.设定各个情况变异参数，避免陷入局部最优解，同时控制数值大小避免无法获得局部最优解
 11.通过已有条件预判之后的涨价
 """
+
+updating the code by some ai's help eventually. and this version may be the final that the price of the cs2's items seem so insane. it isnt like the stocks, so that using something rational to predict how the prices they can be can be so terrible. and awful.
+in that case, that wont be updating again, at least in recent days. and just have fun in cs2, not want to get the bonus.
+enjoying the game
